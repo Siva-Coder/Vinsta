@@ -29,8 +29,9 @@ def download_reel(url: str):
     ydl_opts = {
         "format": "best",
         "outtmpl": output_filename,
-        "username": "vinstaservices",
-        "password": "Vinsta@123"
+        # "username": "vinstaservices",
+        # "password": "Vinsta@123"
+        "cookiefile": "cookies.txt"
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
