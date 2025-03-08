@@ -4,6 +4,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yt_dlp
+import random
+import os
+# from proxies import PROXY_LIST
 
 app = FastAPI()
 
@@ -21,9 +24,13 @@ class ReelRequest(BaseModel):
 
 def download_reel(url: str):
     output_filename = "reel.mp4"
+    # selected_proxy = random.choice(PROXY_LIST)
+    
     ydl_opts = {
         "format": "best",
         "outtmpl": output_filename,
+        "username": os.getenv("INSTAGRAM_USERNAME"),
+        "password": os.getenv("INSTAGRAM_PASSWORD")
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -56,6 +63,10 @@ def get_instagram_reel(data: ReelRequest):
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/")
+def get_home_page():
+  return "Home"
 
 if __name__ == "__main__":
     import uvicorn
