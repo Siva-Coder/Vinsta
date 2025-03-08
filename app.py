@@ -24,14 +24,17 @@ class ReelRequest(BaseModel):
 
 def download_reel(url: str):
     output_filename = "reel.mp4"
+    session_id = os.getenv("INSTAGRAM_SESSIONID")
+    if not session_id:
+        raise Exception("Instagram session ID is missing! Add it as an environment variable.")
     # selected_proxy = random.choice(PROXY_LIST)
     
     ydl_opts = {
         "format": "best",
-        "outtmpl": output_filename,
-        # "username": "vinstaservices",
-        # "password": "Vinsta@123"
-        "cookiefile": "cookies.txt"
+        "cookies": f"sessionid={session_id}",  # Use stored session ID
+        # "outtmpl": "downloads/%(title)s.%(ext)s",
+        "outtmpl": "/tmp/%(title)s.%(ext)s"
+        # "format": "mp4",
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
