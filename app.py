@@ -29,8 +29,8 @@ def download_reel(url: str):
     ydl_opts = {
         "format": "best",
         "outtmpl": output_filename,
-        "username": os.getenv("INSTAGRAM_USERNAME"),
-        "password": os.getenv("INSTAGRAM_PASSWORD")
+        "username": "vinstaservices",
+        "password": "Vinsta@123"
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
