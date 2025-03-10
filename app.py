@@ -3,10 +3,8 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import yt_dlp
-import random
-import os
-# from proxies import PROXY_LIST
+import instaloader
+import re
 
 app = FastAPI()
 
@@ -22,27 +20,48 @@ app.add_middleware(
 class ReelRequest(BaseModel):
     url: str
 
+# Initialize Instaloader
+loader = instaloader.Instaloader(download_pictures=False, download_comments=False, save_metadata=False, post_metadata_txt_pattern="")
+
+def extract_shortcode(url: str):
+    """Extracts the Instagram reel shortcode from various URL formats."""
+    match = re.search(r"instagram\.com/reel/([^/?]+)", url)
+    if match:
+        return match.group(1)  # Extracts only the shortcode
+    raise ValueError("Invalid Instagram reel URL")
+
+def login_instagram():
+    """Load Instagram session from Firefox cookies."""
+    username = os.getenv("INSTAGRAM_USERNAME")
+    session_file = f"session-{username}"
+
+    if not os.path.exists(session_file):
+        raise HTTPException(status_code=400, detail="Session file is missing! Login manually to generate it.")
+
+    try:
+        loader.load_session_from_file(username, session_file)
+        print(f"✅ Logged in using saved session: {session_file}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to load session: {str(e)}")
+
 def download_reel(url: str):
-    output_filename = "reel.mp4"
-    session_id = os.getenv("INSTAGRAM_SESSIONID")
-    if not session_id:
-        raise Exception("Instagram session ID is missing! Add it as an environment variable.")
-    # selected_proxy = random.choice(PROXY_LIST)
-    
-    ydl_opts = {
-        "format": "best",
-        "cookies": f"sessionid={session_id}",  # Use stored session ID
-        # "outtmpl": "downloads/%(title)s.%(ext)s",
-        "outtmpl": "/tmp/%(title)s.%(ext)s"
-        # "format": "mp4",
-    }
+    """Download Instagram reel only (without thumbnails or metadata)."""
+    try:
+        # Extract shortcode from URL
+        shortcode = extract_shortcode(url)
+        post = instaloader.Post.from_shortcode(loader.context, shortcode)
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        # Configure Instaloader to download only video files
+        loader.download_post(post, target="downloads")
 
-    if os.path.exists(output_filename):
-        return output_filename
-    return None
+        # Find and return only the MP4 file (skip thumbnails)
+        for file in os.listdir("downloads"):
+            if file.endswith(".mp4"):
+                return os.path.join("downloads", file)
+
+        raise Exception("Download failed. No video found.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 def encode_video_to_base64(video_path: str):
     """Convert video file to Base64 encoded string."""
@@ -70,7 +89,7 @@ def get_instagram_reel(data: ReelRequest):
 
 @app.get("/")
 def get_home_page():
-  return "Home"
+    return "Home"
 
 if __name__ == "__main__":
     import uvicorn
