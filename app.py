@@ -31,7 +31,7 @@ def download_reel(url: str):
     
     ydl_opts = {
         "format": "best",
-        "cookies": f"cookies.txt",  # Use stored session ID
+        "cookiefile": f"cookies.txt",  # Use stored session ID
         # "outtmpl": "downloads/%(title)s.%(ext)s",
         "outtmpl": output_filename
         # "format": "mp4",
