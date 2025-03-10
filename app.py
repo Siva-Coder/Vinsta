@@ -31,18 +31,17 @@ def extract_shortcode(url: str):
     raise ValueError("Invalid Instagram reel URL")
 
 def login_instagram():
-    """Load Instagram session from Firefox cookies."""
-    username = os.getenv("INSTAGRAM_USERNAME")
-    session_file = f"session-{username}"
+    """Use Instagram cookies for authentication instead of session files."""
+    cookies_file = "cookies.txt"
 
-    if not os.path.exists(session_file):
-        raise HTTPException(status_code=400, detail="Session file is missing! Login manually to generate it.")
+    if not os.path.exists(cookies_file):
+        raise HTTPException(status_code=400, detail="Cookies file is missing! Extract it from Firefox.")
 
     try:
-        loader.load_session_from_file(username, session_file)
-        print(f"✅ Logged in using saved session: {session_file}")
+        loader.load_session_from_file(cookies_file)
+        print("✅ Logged in using cookies")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to load session: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to load cookies: {str(e)}")
 
 def download_reel(url: str):
     """Download Instagram reel only (without thumbnails or metadata)."""
