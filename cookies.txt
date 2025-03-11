@@ -29,7 +29,7 @@
 .google.com	TRUE	/	TRUE	1758807581	__Secure-3PSIDCC	AKEyXzWqLblm6Dfc-Vg1s6JNEzqd0lKhkD9qf-SuF42nOxsLAmC-JnO5n3OzR7midah8JxBwSg
 .google.com	TRUE	/	TRUE	1758807581	__Secure-3PSIDTS	sidts-CjEBQlrA-F_u3Dou2l9iic9PxcpT0NT_37RemXJ60gyq9R66CyIAD6zGnokaJlDQ1RlREAA
 .google.com	TRUE	/verify	TRUE	1757427029	SNID	AJcYyo0duYPpfBqvR6nJpkwq9AZ-n1t1Yz0QFnIvS2BBXy_k9O7r79YUf-XyUgWAfblbc7f5NWXCYr9hL3hWWOmGhAmUPeh6Mw
-.instagram.com	TRUE	/	TRUE	1773070974	csrftoken	mWcD59jDNclom02eryXZFWxz0g7MzAWC
+.instagram.com	TRUE	/	TRUE	1773150095	csrftoken	mWcD59jDNclom02eryXZFWxz0g7MzAWC
 .instagram.com	TRUE	/	TRUE	1776015872	datr	AILMZ-LBSZiurnh74tBRoozz
 .instagram.com	TRUE	/	TRUE	1742223248	dpr	1.25
 .instagram.com	TRUE	/	TRUE	1749397374	ds_user_id	73033767264
@@ -40,7 +40,6 @@
 .instagram.com	TRUE	/	TRUE	1776024563	ps_l	1
 .instagram.com	TRUE	/	TRUE	1776024563	ps_n	1
 .instagram.com	TRUE	/	TRUE	0	rur	"CCO\05473033767264\0541773157374:01f71ee243b76cafacb418e1ecc571c65a301cb05870d8dcb04a9fa04b89a62502e44310"
-.instagram.com	TRUE	/	TRUE	1773153910	sessionid	73033767264%3AmgPOugdXXuEa1C%3A6%3AAYelrZ5ARFweM5Z4n4-m9skibwpiETiDBs69jzJkpw
 .instagram.com	TRUE	/	TRUE	1742223248	wd	1536x779
 .login.microsoftonline.com	TRUE	/	TRUE	1761994911	brcap	0
 .microsoftonline.com	TRUE	/	TRUE	1760964385	wlidperf	FR=L&ST=1727268385460
