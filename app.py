@@ -119,8 +119,6 @@ def get_instagram_reel(data: ReelRequest):
         return {"message": "Download successful", "video_base64": base64_video}
 
     except Exception as e:
-        print("Refreshing cookies as there's a problem")
-        refresh_instagram_cookies()
         raise HTTPException(status_code=400, detail=str(e))
 
 # Home page
