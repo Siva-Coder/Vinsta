@@ -208,6 +208,7 @@ def download_instagram_reel(url: str):
         "format": "best",
         "cookiefile": "cookies.txt",  # Use stored cookies
         "outtmpl": output_filename,
+        "sleep_interval": 10,
     }
 
     try:
