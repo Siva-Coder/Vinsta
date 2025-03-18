@@ -7,6 +7,7 @@ from pydantic import BaseModel
 import yt_dlp
 from playwright.sync_api import sync_playwright
 import time
+from enum import Enum
 
 app = FastAPI()
 
@@ -19,8 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class ReelType(str, Enum):
+    INSTAGRAM = "instagram"
+    YOUTUBE = "youtube"
+
 class ReelRequest(BaseModel):
     url: str
+    type: ReelType
 
 # Function to refresh Instagram cookies using Playwright
 def refresh_instagram_cookies():
@@ -74,7 +80,7 @@ def are_cookies_expired():
     return False
 
 # Function to download Instagram reel
-def download_reel(url: str):
+def download_instagram_reel(url: str):
     output_filename = "reel.mp4"
 
     # Check if cookies are expired or missing
@@ -95,6 +101,24 @@ def download_reel(url: str):
         return output_filename
     return None
 
+# Function to download YouTube Shorts
+def download_youtube_shorts(url: str):
+    output_filename = "shorts.mp4"
+
+    ydl_opts = {
+        "format": "best",  # Download the best available quality
+        "outtmpl": output_filename,  # Save the video with the specified filename
+        "quiet": True,  # Suppress yt-dlp output
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        return output_filename
+    except Exception as e:
+        print(f"An error occurred while downloading YouTube Shorts: {e}")
+        return None
+
 # Function to encode video to Base64
 def encode_video_to_base64(video_path: str):
     """Convert video file to Base64 encoded string."""
@@ -102,11 +126,19 @@ def encode_video_to_base64(video_path: str):
         encoded_string = base64.b64encode(video_file.read()).decode("utf-8")
     return encoded_string
 
-# API endpoint to download Instagram reel
+# API endpoint to download reel
 @app.post("/download-reel/")
-def get_instagram_reel(data: ReelRequest):
+def get_reel(data: ReelRequest):
     try:
-        video_path = download_reel(data.url)
+        video_path = None
+
+        # Handle Instagram Reels
+        if data.type == ReelType.INSTAGRAM:
+            video_path = download_instagram_reel(data.url)
+        # Handle YouTube Shorts
+        elif data.type == ReelType.YOUTUBE:
+            video_path = download_youtube_shorts(data.url)
+
         if not video_path:
             raise HTTPException(status_code=400, detail="Failed to download video")
 
