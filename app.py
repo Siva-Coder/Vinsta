@@ -1,13 +1,16 @@
 import base64
 import os
-import json
+import time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yt_dlp
-from playwright.sync_api import sync_playwright
-import time
 from enum import Enum
+# from pymongo import MongoClient
+from pymongo.mongo_client import MongoClient
+from pymongo.server_api import ServerApi
+from datetime import datetime
+import browser_cookie3
 
 app = FastAPI()
 
@@ -20,6 +23,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# MongoDB connection
+client = MongoClient("mongodb+srv://siva:123456mongodb@vinsta.ljqdp.mongodb.net/?retryWrites=true&w=majority&appName=vinsta", server_api=ServerApi('1'))
+
+db = client["cookies_db"]
+cookies_collection = db["cookies"]
+
 class ReelType(str, Enum):
     INSTAGRAM = "instagram"
     YOUTUBE = "youtube"
@@ -28,85 +37,123 @@ class ReelRequest(BaseModel):
     url: str
     type: ReelType
 
-# Function to refresh Instagram cookies using Playwright
-def refresh_instagram_cookies():
-    with sync_playwright() as p:
-        # Launch a headless browser
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
-        page = context.new_page()
+# Function to extract and save cookies to MongoDB
+def save_cookies_to_db(platform: str):
+    try:
+        if platform == "instagram":
+            # Extract Instagram cookies using browser-cookie3
+            cookies = list(browser_cookie3.firefox(domain_name="instagram.com"))
+        elif platform == "youtube":
+            # Extract YouTube cookies using browser-cookie3
+            cookies = list(browser_cookie3.firefox(domain_name="youtube.com"))
+        else:
+            raise ValueError("Invalid platform")
 
-        # Navigate to Instagram login page
-        page.goto("https://www.instagram.com/accounts/login/")
-        page.wait_for_selector("input[name='username']")
+        # Convert cookies to a list of dictionaries in Netscape format
+        cookies_data = [{
+            "domain": cookie.domain,
+            "flag": "TRUE" if cookie.domain.startswith('.') else "FALSE",
+            "path": cookie.path,
+            "secure": "TRUE" if cookie.secure else "FALSE",
+            "expires": int(cookie.expires) if cookie.expires else "0",
+            "name": cookie.name,
+            "value": cookie.value,
+        } for cookie in cookies]
 
-        # Fill in login credentials (use environment variables for security)
-        page.fill("input[name='username']", os.getenv("INSTAGRAM_USERNAME"))
-        page.fill("input[name='password']", os.getenv("INSTAGRAM_PASSWORD"))
+        # Save cookies to MongoDB
+        cookies_collection.update_one(
+            {"platform": platform},
+            {"$set": {"cookies": cookies_data, "timestamp": datetime.utcnow()}},
+            upsert=True,
+        )
+        print(f"Cookies for {platform} have been saved to MongoDB.")
+    except Exception as e:
+        print(f"An error occurred while extracting cookies: {e}")
+        raise HTTPException(status_code=500, detail="Failed to extract cookies.")
 
-        # Click the login button
-        page.click("button[type='submit']")
-        page.wait_for_selector("svg[aria-label='Instagram']")  # Wait for the home page to load
+# Function to get cookies from MongoDB
+def get_cookies_from_db(platform: str):
+    cookies_data = cookies_collection.find_one({"platform": platform})
+    if not cookies_data:
+        raise HTTPException(status_code=400, detail=f"No cookies found for {platform}. Please refresh cookies.")
+    return cookies_data["cookies"]
 
-        # Extract cookies
-        cookies = context.cookies()
-        with open("cookies.txt", "w") as f:
-            for cookie in cookies:
-                f.write(
-                    f"{cookie['domain']}\t"
-                    f"{'TRUE' if cookie['domain'].startswith('.') else 'FALSE'}\t"
-                    f"{cookie['path']}\t"
-                    f"{'TRUE' if cookie['secure'] else 'FALSE'}\t"
-                    f"{cookie['expires']}\t"
-                    f"{cookie['name']}\t"
-                    f"{cookie['value']}\n"
-                )
-
-        # Close the browser
-        browser.close()
-
-# Function to check if cookies are expired
-def are_cookies_expired():
-    if not os.path.exists("cookies.txt"):
-        return True  # Cookies file doesn't exist
-
-    with open("cookies.txt", "r") as f:
-        lines = f.readlines()
-        for line in lines:
-            if "sessionid" in line:
-                expires = int(line.split("\t")[4])  # Get the expiration timestamp
-                if expires < time.time():  # Compare with current time
-                    return True  # Cookies are expired
-    return False
-
-# Function to download Instagram reel
 def download_instagram_reel(url: str):
     output_filename = "reel.mp4"
 
-    # Check if cookies are expired or missing
-    if are_cookies_expired():
-        print("Cookies are expired")
-        refresh_instagram_cookies()
+    # Get Instagram cookies from MongoDB
+    cookies = get_cookies_from_db("instagram")
+
+    # Save cookies to a temporary file in Netscape format
+    with open("cookies.txt", "w") as f:
+        # Add the required header line
+        f.write("# Netscape HTTP Cookie File\n")
+
+        # Write each cookie in Netscape format
+        for cookie in cookies:
+            line = (
+                f"{cookie['domain']}\t"
+                f"{cookie['flag']}\t"
+                f"{cookie['path']}\t"
+                f"{cookie['secure']}\t"
+                f"{cookie['expires']}\t"
+                f"{cookie['name']}\t"
+                f"{cookie['value']}\n"
+            )
+            f.write(line)
+
+    # Verify the contents of the cookies file
+    with open("cookies.txt", "r") as f:
+        print("Contents of cookies.txt:")
+        print(f.read())
 
     ydl_opts = {
         "format": "best",
         "cookiefile": "cookies.txt",  # Use stored cookies
         "outtmpl": output_filename,
+        "verbose": True,  # Enable verbose logging for debugging
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-
-    if os.path.exists(output_filename):
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
         return output_filename
-    return None
+    except Exception as e:
+        print(f"An error occurred while downloading Instagram Reel: {e}")
+        return None
 
-# Function to download YouTube Shorts
 def download_youtube_shorts(url: str):
     output_filename = "shorts.mp4"
 
+    # Get YouTube cookies from MongoDB
+    cookies = get_cookies_from_db("youtube")
+
+    # Save cookies to a temporary file in Netscape format
+    with open("youtube_cookies.txt", "w") as f:
+        # Add the required header line
+        f.write("# Netscape HTTP Cookie File\n")
+
+        # Write each cookie in Netscape format
+        for cookie in cookies:
+            line = (
+                f"{cookie['domain']}\t"
+                f"{cookie['flag']}\t"
+                f"{cookie['path']}\t"
+                f"{cookie['secure']}\t"
+                f"{cookie['expires']}\t"
+                f"{cookie['name']}\t"
+                f"{cookie['value']}\n"
+            )
+            f.write(line)
+
+    # Verify the contents of the cookies file
+    with open("youtube_cookies.txt", "r") as f:
+        print("Contents of youtube_cookies.txt:")
+        print(f.read())
+
     ydl_opts = {
         "format": "best",  # Download the best available quality
+        "cookiefile": "youtube_cookies.txt",  # Use YouTube cookies
         "outtmpl": output_filename,  # Save the video with the specified filename
         "quiet": True,  # Suppress yt-dlp output
     }
@@ -157,6 +204,14 @@ def get_reel(data: ReelRequest):
 @app.get("/")
 def get_home_page():
     return "Home"
+
+# Scheduled task to refresh cookies (e.g., using Render's Cron Jobs)
+def refresh_cookies():
+    save_cookies_to_db("instagram")
+    save_cookies_to_db("youtube")
+    print("Cookies have been refreshed.")
+    
+refresh_cookies()
 
 if __name__ == "__main__":
     import uvicorn
