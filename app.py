@@ -1,16 +1,16 @@
-import base64
 import os
-import time
+import base64
+import asyncio
+import json
+import websockets
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yt_dlp
 from enum import Enum
-# from pymongo import MongoClient
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 from datetime import datetime
-import browser_cookie3
 
 app = FastAPI()
 
@@ -37,39 +37,132 @@ class ReelRequest(BaseModel):
     url: str
     type: ReelType
 
-# Function to extract and save cookies to MongoDB
-def save_cookies_to_db(platform: str):
-    try:
-        if platform == "instagram":
-            # Extract Instagram cookies using browser-cookie3
-            cookies = list(browser_cookie3.firefox(domain_name="instagram.com"))
-        elif platform == "youtube":
-            # Extract YouTube cookies using browser-cookie3
-            cookies = list(browser_cookie3.firefox(domain_name="youtube.com"))
-        else:
-            raise ValueError("Invalid platform")
+# Function to extract Instagram cookies using Browserless WebSocket API
+async def extract_instagram_cookies():
+    # Browserless WebSocket URL
+    BROWSERLESS_WS_URL = "wss://chrome.browserless.io"
+    BROWSERLESS_API_KEY = "Ry0VHriOagKXZn4022be466f58d5cd3c9fedf2f78b"
 
-        # Convert cookies to a list of dictionaries in Netscape format
-        cookies_data = [{
-            "domain": cookie.domain,
-            "flag": "TRUE" if cookie.domain.startswith('.') else "FALSE",
-            "path": cookie.path,
-            "secure": "TRUE" if cookie.secure else "FALSE",
-            "expires": int(cookie.expires) if cookie.expires else "0",
-            "name": cookie.name,
-            "value": cookie.value,
-        } for cookie in cookies]
+    if not BROWSERLESS_API_KEY:
+        raise ValueError("Browserless API key is missing. Set the BROWSERLESS_API_KEY environment variable.")
 
-        # Save cookies to MongoDB
-        cookies_collection.update_one(
-            {"platform": platform},
-            {"$set": {"cookies": cookies_data, "timestamp": datetime.utcnow()}},
-            upsert=True,
-        )
-        print(f"Cookies for {platform} have been saved to MongoDB.")
-    except Exception as e:
-        print(f"An error occurred while extracting cookies: {e}")
-        raise HTTPException(status_code=500, detail="Failed to extract cookies.")
+    # Instagram URL
+    instagram_url = "https://www.instagram.com"
+
+    # Connect to Browserless WebSocket
+    websocket_url = f"{BROWSERLESS_WS_URL}?token={BROWSERLESS_API_KEY}"
+    async with websockets.connect(websocket_url) as websocket:
+        # Open a new browser page
+        await websocket.send(json.dumps({
+            "id": 1,
+            "method": "Target.createTarget",
+            "params": {"url": "about:blank"},
+        }))
+        response = await websocket.recv()
+        print("Response from Target.createTarget:", response)  # Debugging
+
+        # Parse the response
+        response_data = json.loads(response)
+        if "error" in response_data:
+            raise ValueError(f"Browserless error: {response_data['error']['message']}")
+        if "result" not in response_data:
+            raise ValueError(f"Unexpected response format: {response_data}")
+
+        target_id = response_data["result"]["targetId"]
+
+        # Attach to the target (page)
+        await websocket.send(json.dumps({
+            "id": 2,
+            "method": "Target.attachToTarget",
+            "params": {"targetId": target_id, "flatten": True},
+        }))
+
+        # Wait for the Target.attachedToTarget event
+        session_id = None
+        while True:
+            response = await websocket.recv()
+            print("Response from WebSocket:", response)  # Debugging
+
+            # Parse the response
+            response_data = json.loads(response)
+            if "method" in response_data and response_data["method"] == "Target.attachedToTarget":
+                session_id = response_data["params"]["sessionId"]
+                break
+            elif "error" in response_data:
+                raise ValueError(f"Browserless error: {response_data['error']['message']}")
+
+        if not session_id:
+            raise ValueError("Failed to attach to target: sessionId not found.")
+
+        # Navigate to the Instagram page
+        await websocket.send(json.dumps({
+            "id": 3,
+            "method": "Page.navigate",
+            "params": {"url": instagram_url},
+            "sessionId": session_id,
+        }))
+        response = await websocket.recv()
+        print("Response from Page.navigate:", response)  # Debugging
+
+        # Wait for the page to load
+        await websocket.send(json.dumps({
+            "id": 4,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": """
+                    new Promise((resolve) => {
+                        const interval = setInterval(() => {
+                            if (document.querySelector("svg[aria-label='Instagram']")) {
+                                clearInterval(interval);
+                                resolve();
+                            }
+                        }, 100);
+                    });
+                """,
+                "awaitPromise": True,
+            },
+            "sessionId": session_id,
+        }))
+        response = await websocket.recv()
+        print("Response from Runtime.evaluate:", response)  # Debugging
+
+        # Extract cookies
+        await websocket.send(json.dumps({
+            "id": 5,
+            "method": "Network.getCookies",
+            "params": {},
+            "sessionId": session_id,
+        }))
+        response = await websocket.recv()
+        print("Response from Network.getCookies:", response)  # Debugging
+
+        # Parse the response
+        response_data = json.loads(response)
+        if "error" in response_data:
+            raise ValueError(f"Browserless error: {response_data['error']['message']}")
+        if "result" not in response_data:
+            raise ValueError(f"Unexpected response format: {response_data}")
+
+        cookies = response_data["result"]["cookies"]
+
+        # Close the browser
+        await websocket.send(json.dumps({
+            "id": 6,
+            "method": "Target.closeTarget",
+            "params": {"targetId": target_id},
+        }))
+
+    return cookies
+
+# Function to save cookies to MongoDB
+def save_cookies_to_db(platform: str, cookies: list):
+    # Save cookies to MongoDB
+    cookies_collection.update_one(
+        {"platform": platform},
+        {"$set": {"cookies": cookies, "timestamp": datetime.utcnow()}},
+        upsert=True,
+    )
+    print(f"Cookies for {platform} have been saved to MongoDB.")
 
 # Function to get cookies from MongoDB
 def get_cookies_from_db(platform: str):
@@ -78,6 +171,7 @@ def get_cookies_from_db(platform: str):
         raise HTTPException(status_code=400, detail=f"No cookies found for {platform}. Please refresh cookies.")
     return cookies_data["cookies"]
 
+# Function to download Instagram reel
 def download_instagram_reel(url: str):
     output_filename = "reel.mp4"
 
@@ -91,27 +185,29 @@ def download_instagram_reel(url: str):
 
         # Write each cookie in Netscape format
         for cookie in cookies:
+            # Set the flag to TRUE if the domain starts with a dot
+            flag = "TRUE" if cookie["domain"].startswith(".") else "FALSE"
             line = (
                 f"{cookie['domain']}\t"
-                f"{cookie['flag']}\t"
+                f"{flag}\t"
                 f"{cookie['path']}\t"
-                f"{cookie['secure']}\t"
-                f"{cookie['expires']}\t"
+                f"{str(cookie['secure']).upper()}\t"
+                f"{int(cookie.get('expires', 0))}\t"
                 f"{cookie['name']}\t"
                 f"{cookie['value']}\n"
             )
             f.write(line)
-
+    
     # Verify the contents of the cookies file
     with open("cookies.txt", "r") as f:
         print("Contents of cookies.txt:")
         print(f.read())
 
+    # Use yt-dlp to download the reel
     ydl_opts = {
         "format": "best",
         "cookiefile": "cookies.txt",  # Use stored cookies
         "outtmpl": output_filename,
-        "verbose": True,  # Enable verbose logging for debugging
     }
 
     try:
@@ -122,6 +218,7 @@ def download_instagram_reel(url: str):
         print(f"An error occurred while downloading Instagram Reel: {e}")
         return None
 
+# Function to download YouTube Shorts
 def download_youtube_shorts(url: str):
     output_filename = "shorts.mp4"
 
@@ -145,11 +242,6 @@ def download_youtube_shorts(url: str):
                 f"{cookie['value']}\n"
             )
             f.write(line)
-
-    # Verify the contents of the cookies file
-    with open("youtube_cookies.txt", "r") as f:
-        print("Contents of youtube_cookies.txt:")
-        print(f.read())
 
     ydl_opts = {
         "format": "best",  # Download the best available quality
@@ -175,7 +267,7 @@ def encode_video_to_base64(video_path: str):
 
 # API endpoint to download reel
 @app.post("/download-reel/")
-def get_reel(data: ReelRequest):
+async def get_reel(data: ReelRequest):
     try:
         video_path = None
 
@@ -206,13 +298,15 @@ def get_home_page():
     return "Home"
 
 # Scheduled task to refresh cookies (e.g., using Render's Cron Jobs)
-def refresh_cookies():
-    save_cookies_to_db("instagram")
-    save_cookies_to_db("youtube")
-    print("Cookies have been refreshed.")
-    
-refresh_cookies()
+async def refresh_cookies():
+    # Refresh Instagram cookies
+    instagram_cookies = await extract_instagram_cookies()
+    save_cookies_to_db("instagram", instagram_cookies)
 
+    print("Instagram cookies have been refreshed.")
+
+# Run the refresh_cookies function
 if __name__ == "__main__":
     import uvicorn
+    asyncio.run(refresh_cookies())  # Refresh cookies on startup
     uvicorn.run(app, host="127.0.0.1", port=8000)
