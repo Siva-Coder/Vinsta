@@ -175,7 +175,7 @@ def download_instagram_reel(url: str):
         "cookiefile": "cookies.txt",
         "outtmpl": output_filename,
         "sleep_interval": 10,  # Add a delay to avoid rate limits
-        "proxy": proxy,  # Use a random proxy
+        # "proxy": proxy,  # Use a random proxy
         "verbose": True,  # Enable verbose logging
     }
 
