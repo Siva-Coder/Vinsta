@@ -1,33 +1,17 @@
-import os
 import base64
-import asyncio
+import os
 import json
+import asyncio
 import websockets
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import yt_dlp
-from enum import Enum
-from pymongo.mongo_client import MongoClient
-from pymongo.server_api import ServerApi
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from pymongo import MongoClient
 from datetime import datetime
-
-app = FastAPI()
-
-# Enable CORS for frontend access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# MongoDB connection
-client = MongoClient("mongodb+srv://siva:123456mongodb@vinsta.ljqdp.mongodb.net/?retryWrites=true&w=majority&appName=vinsta", server_api=ServerApi('1'))
-
-db = client["cookies_db"]
-cookies_collection = db["cookies"]
+import yt_dlp
+import random
+from enum import Enum
+from pydantic import BaseModel
+from contextlib import asynccontextmanager
+from proxies import PROXY_POOL
 
 class ReelType(str, Enum):
     INSTAGRAM = "instagram"
@@ -37,21 +21,20 @@ class ReelRequest(BaseModel):
     url: str
     type: ReelType
 
-# Function to extract Instagram cookies using Browserless WebSocket API
+# MongoDB connection
+client = MongoClient("mongodb+srv://siva:123456mongodb@vinsta.ljqdp.mongodb.net/?retryWrites=true&w=majority&appName=vinsta")
+db = client["cookies_db"]
+cookies_collection = db["cookies"]
+
+# Browserless WebSocket URL and API key
+BROWSERLESS_WS_URL = "wss://chrome.browserless.io"
+BROWSERLESS_API_KEY = "Ry0VHriOagKXZn4022be466f58d5cd3c9fedf2f78b"  # Replace with your API key
+
 async def extract_instagram_cookies():
-    # Browserless WebSocket URL
-    BROWSERLESS_WS_URL = "wss://chrome.browserless.io"
-    BROWSERLESS_API_KEY = "Ry0VHriOagKXZn4022be466f58d5cd3c9fedf2f78b"
-
-    if not BROWSERLESS_API_KEY:
-        raise ValueError("Browserless API key is missing. Set the BROWSERLESS_API_KEY environment variable.")
-
-    # Instagram URL
+    """Extract Instagram cookies using Browserless."""
     instagram_url = "https://www.instagram.com"
 
-    # Connect to Browserless WebSocket
-    websocket_url = f"{BROWSERLESS_WS_URL}?token={BROWSERLESS_API_KEY}"
-    async with websockets.connect(websocket_url) as websocket:
+    async with websockets.connect(f"{BROWSERLESS_WS_URL}?token={BROWSERLESS_API_KEY}") as websocket:
         # Open a new browser page
         await websocket.send(json.dumps({
             "id": 1,
@@ -59,15 +42,7 @@ async def extract_instagram_cookies():
             "params": {"url": "about:blank"},
         }))
         response = await websocket.recv()
-        print("Response from Target.createTarget:", response)  # Debugging
-
-        # Parse the response
         response_data = json.loads(response)
-        if "error" in response_data:
-            raise ValueError(f"Browserless error: {response_data['error']['message']}")
-        if "result" not in response_data:
-            raise ValueError(f"Unexpected response format: {response_data}")
-
         target_id = response_data["result"]["targetId"]
 
         # Attach to the target (page)
@@ -77,32 +52,23 @@ async def extract_instagram_cookies():
             "params": {"targetId": target_id, "flatten": True},
         }))
 
-        # Wait for the Target.attachedToTarget event
+        # Wait for the session ID
         session_id = None
         while True:
             response = await websocket.recv()
-            print("Response from WebSocket:", response)  # Debugging
-
-            # Parse the response
             response_data = json.loads(response)
-            if "method" in response_data and response_data["method"] == "Target.attachedToTarget":
+            if response_data.get("method") == "Target.attachedToTarget":
                 session_id = response_data["params"]["sessionId"]
                 break
-            elif "error" in response_data:
-                raise ValueError(f"Browserless error: {response_data['error']['message']}")
 
-        if not session_id:
-            raise ValueError("Failed to attach to target: sessionId not found.")
-
-        # Navigate to the Instagram page
+        # Navigate to Instagram
         await websocket.send(json.dumps({
             "id": 3,
             "method": "Page.navigate",
             "params": {"url": instagram_url},
             "sessionId": session_id,
         }))
-        response = await websocket.recv()
-        print("Response from Page.navigate:", response)  # Debugging
+        await websocket.recv()
 
         # Wait for the page to load
         await websocket.send(json.dumps({
@@ -123,8 +89,7 @@ async def extract_instagram_cookies():
             },
             "sessionId": session_id,
         }))
-        response = await websocket.recv()
-        print("Response from Runtime.evaluate:", response)  # Debugging
+        await websocket.recv()
 
         # Extract cookies
         await websocket.send(json.dumps({
@@ -134,15 +99,7 @@ async def extract_instagram_cookies():
             "sessionId": session_id,
         }))
         response = await websocket.recv()
-        print("Response from Network.getCookies:", response)  # Debugging
-
-        # Parse the response
         response_data = json.loads(response)
-        if "error" in response_data:
-            raise ValueError(f"Browserless error: {response_data['error']['message']}")
-        if "result" not in response_data:
-            raise ValueError(f"Unexpected response format: {response_data}")
-
         cookies = response_data["result"]["cookies"]
 
         # Close the browser
@@ -154,61 +111,72 @@ async def extract_instagram_cookies():
 
     return cookies
 
-# Function to save cookies to MongoDB
-def save_cookies_to_db(platform: str, cookies: list):
-    # Save cookies to MongoDB
+def save_cookies_to_db(cookies: list):
+    """Save cookies to MongoDB."""
     cookies_collection.update_one(
-        {"platform": platform},
+        {"platform": "instagram"},
         {"$set": {"cookies": cookies, "timestamp": datetime.utcnow()}},
         upsert=True,
     )
-    print(f"Cookies for {platform} have been saved to MongoDB.")
 
-# Function to get cookies from MongoDB
-def get_cookies_from_db(platform: str):
-    cookies_data = cookies_collection.find_one({"platform": platform})
+def get_cookies_from_db():
+    """Retrieve cookies from MongoDB."""
+    cookies_data = cookies_collection.find_one({"platform": "instagram"})
     if not cookies_data:
-        raise HTTPException(status_code=400, detail=f"No cookies found for {platform}. Please refresh cookies.")
+        return None
     return cookies_data["cookies"]
 
-# Function to download Instagram reel
+async def refresh_cookies(background_tasks: BackgroundTasks):
+    """Refresh Instagram cookies and save them to MongoDB."""
+    try:
+        cookies = await extract_instagram_cookies()
+        save_cookies_to_db(cookies)
+        print("Cookies refreshed successfully.")
+    except Exception as e:
+        print(f"Failed to refresh cookies: {e}")
+    finally:
+        # Schedule the next refresh after 6 hours
+        background_tasks.add_task(refresh_cookies, background_tasks)
+
+def encode_video_to_base64(video_path: str):
+    """Convert video file to Base64 encoded string."""
+    with open(video_path, "rb") as video_file:
+        encoded_string = base64.b64encode(video_file.read()).decode("utf-8")
+    return encoded_string
+  
 def download_instagram_reel(url: str):
     output_filename = "reel.mp4"
 
-    # Get Instagram cookies from MongoDB
-    cookies = get_cookies_from_db("instagram")
+    # Get cookies from MongoDB
+    cookies = get_cookies_from_db()
+    if not cookies:
+        raise ValueError("No cookies found. Please refresh cookies.")
 
-    # Save cookies to a temporary file in Netscape format
+    # Save cookies to a temporary file
     with open("cookies.txt", "w") as f:
-        # Add the required header line
         f.write("# Netscape HTTP Cookie File\n")
-
-        # Write each cookie in Netscape format
         for cookie in cookies:
-            # Set the flag to TRUE if the domain starts with a dot
-            flag = "TRUE" if cookie["domain"].startswith(".") else "FALSE"
-            line = (
+            f.write(
                 f"{cookie['domain']}\t"
-                f"{flag}\t"
+                f"{'TRUE' if cookie['domain'].startswith('.') else 'FALSE'}\t"
                 f"{cookie['path']}\t"
                 f"{str(cookie['secure']).upper()}\t"
                 f"{int(cookie.get('expires', 0))}\t"
                 f"{cookie['name']}\t"
                 f"{cookie['value']}\n"
             )
-            f.write(line)
-    
-    # Verify the contents of the cookies file
-    with open("cookies.txt", "r") as f:
-        print("Contents of cookies.txt:")
-        print(f.read())
 
-    # Use yt-dlp to download the reel
+    # Use a random proxy from the pool
+    proxy = random.choice(PROXY_POOL)
+    print("Using proxy", proxy)
+    # Download the reel using yt-dlp
     ydl_opts = {
         "format": "best",
-        "cookiefile": "cookies.txt",  # Use stored cookies
+        "cookiefile": "cookies.txt",
         "outtmpl": output_filename,
-        "sleep_interval": 10,
+        "sleep_interval": 10,  # Add a delay to avoid rate limits
+        "proxy": proxy,  # Use a random proxy
+        "verbose": True,  # Enable verbose logging
     }
 
     try:
@@ -216,98 +184,39 @@ def download_instagram_reel(url: str):
             ydl.download([url])
         return output_filename
     except Exception as e:
-        print(f"An error occurred while downloading Instagram Reel: {e}")
-        return None
+        raise ValueError(f"Failed to download Instagram Reel: {e}")
 
-# Function to download YouTube Shorts
-def download_youtube_shorts(url: str):
-    output_filename = "shorts.mp4"
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown."""
+    # Refresh cookies on startup
+    background_tasks = BackgroundTasks()
+    await refresh_cookies(background_tasks)
+    yield
+    # Cleanup on shutdown (if needed)
+    print("Shutting down...")
 
-    # Get YouTube cookies from MongoDB
-    cookies = get_cookies_from_db("youtube")
+app = FastAPI(lifespan=lifespan)
 
-    # Save cookies to a temporary file in Netscape format
-    with open("youtube_cookies.txt", "w") as f:
-        # Add the required header line
-        f.write("# Netscape HTTP Cookie File\n")
-
-        # Write each cookie in Netscape format
-        for cookie in cookies:
-            line = (
-                f"{cookie['domain']}\t"
-                f"{cookie['flag']}\t"
-                f"{cookie['path']}\t"
-                f"{cookie['secure']}\t"
-                f"{cookie['expires']}\t"
-                f"{cookie['name']}\t"
-                f"{cookie['value']}\n"
-            )
-            f.write(line)
-
-    ydl_opts = {
-        "format": "best",  # Download the best available quality
-        "cookiefile": "youtube_cookies.txt",  # Use YouTube cookies
-        "outtmpl": output_filename,  # Save the video with the specified filename
-        "quiet": True,  # Suppress yt-dlp output
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        return output_filename
-    except Exception as e:
-        print(f"An error occurred while downloading YouTube Shorts: {e}")
-        return None
-
-# Function to encode video to Base64
-def encode_video_to_base64(video_path: str):
-    """Convert video file to Base64 encoded string."""
-    with open(video_path, "rb") as video_file:
-        encoded_string = base64.b64encode(video_file.read()).decode("utf-8")
-    return encoded_string
-
-# API endpoint to download reel
 @app.post("/download-reel/")
-async def get_reel(data: ReelRequest):
+async def download_reel(data: ReelRequest, background_tasks: BackgroundTasks):
     try:
-        video_path = None
+        # Refresh cookies if necessary
+        if not get_cookies_from_db():
+            await refresh_cookies(background_tasks)
 
-        # Handle Instagram Reels
-        if data.type == ReelType.INSTAGRAM:
-            video_path = download_instagram_reel(data.url)
-        # Handle YouTube Shorts
-        elif data.type == ReelType.YOUTUBE:
-            video_path = download_youtube_shorts(data.url)
-
-        if not video_path:
-            raise HTTPException(status_code=400, detail="Failed to download video")
-
+        # Download the Instagram Reel
+        video_path = download_instagram_reel(data.url)
+        
         # Convert video to Base64
         base64_video = encode_video_to_base64(video_path)
 
         # Remove file after encoding to free space
         os.remove(video_path)
-
-        return {"message": "Download successful", "video_base64": base64_video}
-
+        return {"message": "Download successful", "video_path": base64_video}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# Home page
-@app.get("/")
-def get_home_page():
-    return "Home"
-
-# Scheduled task to refresh cookies (e.g., using Render's Cron Jobs)
-async def refresh_cookies():
-    # Refresh Instagram cookies
-    instagram_cookies = await extract_instagram_cookies()
-    save_cookies_to_db("instagram", instagram_cookies)
-
-    print("Instagram cookies have been refreshed.")
-
-# Run the refresh_cookies function
 if __name__ == "__main__":
     import uvicorn
-    asyncio.run(refresh_cookies())  # Refresh cookies on startup
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
